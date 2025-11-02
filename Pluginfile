@@ -1,0 +1,4 @@
+# Plugins used when running lanes from this shared repo (optional for consumers)
+# Consumers should also add this in their own repo if they use distribute_android_shared
+
+gem 'fastlane-plugin-firebase_app_distribution'
