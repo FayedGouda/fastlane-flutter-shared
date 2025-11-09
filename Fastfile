@@ -34,8 +34,8 @@ def do_prepare_env(flavor:, load_into_fastlane: false, dest: '.env', env_map: ni
   UI.success("Copied #{env_path} -> #{File.join(root, dest)}")
 end
 
-desc "Prepare .env for a flavor (shared)"
-lane :prepare_env_shared do |options|
+desc "Prepare .env for a flavor"
+lane :prepare_env do |options|
   do_prepare_env(
     flavor: options[:flavor] || 'production',
     load_into_fastlane: options[:load] || options[:load_into_fastlane] || false,
@@ -44,8 +44,8 @@ lane :prepare_env_shared do |options|
   )
 end
 
-desc "Bump pubspec version patch and build (shared)"
-lane :bump_pubspec_version_shared do
+desc "Bump pubspec version patch and build"
+lane :bump_pubspec_version do
   root = find_repo_root
   pubspec = File.join(root, 'pubspec.yaml')
   content = File.read(pubspec)
@@ -58,45 +58,43 @@ lane :bump_pubspec_version_shared do
 end
 
 platform :android do
-  desc "Build Android APK (shared)"
-  lane :build_android_shared do |options|
+  desc "Build Android APK"
+  lane :build_android do |options|
     flavor   = options[:flavor] || 'production'
     target   = options[:target] || "lib/main_#{flavor}.dart"
     copy_env = options.fetch(:copy_env, true)
     env_map  = options[:env_map]
 
-    prepare_env_shared(flavor: flavor, load: false, env_map: env_map) if copy_env
+    prepare_env(flavor: flavor, load: false, env_map: env_map) if copy_env
     sh "flutter --version"
     sh "flutter clean"
     sh "flutter build apk --release --flavor #{flavor} -t #{target}"
   end
 
-desc "Distribute App Bundle to Firebase App Distribution (shared)"
-platform :android do
-  desc "Build Android app bundle (shared)"
-  lane :build_android_app_bundle_shared do |options|
+  desc "Build Android app bundle"
+  lane :build_android_app_bundle do |options|
     flavor   = options[:flavor] || 'production'
     target   = options[:target] || "lib/main_#{flavor}.dart"
     copy_env = options.fetch(:copy_env, true)
     env_map  = options[:env_map]
 
-    prepare_env_shared(flavor: flavor, load: false, env_map: env_map) if copy_env
+    prepare_env(flavor: flavor, load: false, env_map: env_map) if copy_env
     sh "flutter --version"
     sh "flutter clean"
     sh "flutter build appbundle --release --flavor #{flavor} -t #{target}"
   end
 
-  desc "Distribute APK to Firebase App Distribution (shared)"
-  lane :distribute_android_shared do |options|
+  desc "Distribute APK to Firebase App Distribution"
+  lane :distribute_android_to_firebase do |options|
     flavor   = options[:flavor] || 'production'
     target   = options[:target] || "lib/main_#{flavor}.dart"
     copy_env = options.fetch(:copy_env, true)
     env_map  = options[:env_map]
     apk_path = options[:apk_path] || "../build/app/outputs/flutter-apk/app-#{flavor}-release.apk"
 
-    prepare_env_shared(flavor: flavor, load: true, env_map: env_map) if copy_env
-    bump_pubspec_version_shared if options.fetch(:bump, true)
-    build_android_shared(flavor: flavor, target: target, copy_env: false, env_map: env_map)
+    prepare_env(flavor: flavor, load: true, env_map: env_map) if copy_env
+    bump_pubspec_version if options.fetch(:bump, true)
+    build_android(flavor: flavor, target: target, copy_env: false, env_map: env_map)
 
     release_notes = options[:release_notes] || ENV["RELEASE_NOTES"] || Actions.sh("git", "log", "-1", "--pretty=%B").strip
 

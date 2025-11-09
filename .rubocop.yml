@@ -1,0 +1,15 @@
+AllCops:
+  NewCops: enable
+  TargetRubyVersion: 3.2
+  Exclude:
+    - 'vendor/**/*'
+    - 'build/**/*'
+
+Layout/LineLength:
+  Max: 120
+
+Metrics/MethodLength:
+  Enabled: false
+
+Style/FrozenStringLiteralComment:
+  Enabled: false
