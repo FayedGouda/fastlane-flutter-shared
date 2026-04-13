@@ -1,15 +1,21 @@
 # fastlane-flutter-shared
 
-Reusable Fastlane lanes for Flutter apps (Android). These lanes centralize common build and distribution steps so your Flutter projects can import and call them directly.
+Reusable Fastlane lanes for Flutter apps. These lanes centralize common build and distribution steps so your Flutter projects can import and call them directly.
 
-Currently Android lanes are provided; iOS can be added using the same pattern.
+Android and iOS lanes are provided in the exported `Fastfile`.
 
 ## What you get
 
-- prepare_env_shared: Copies a flavor-specific `.env.*` to `.env` (optionally loads it into Fastlane process)
-- bump_pubspec_version_shared: Increments pubspec patch version and build number
-- build_android_shared: Builds a release APK for the given flavor
-- distribute_android_shared: Builds and uploads the APK to Firebase App Distribution
+- `prepare_env`: Copies a flavor-specific `.env.*` to `.env` and can load it into the Fastlane process
+- `bump_pubspec_version`: Increments pubspec patch version and build number
+- `build_apk`: Builds a release APK for the given flavor
+- `build_app_bundle`: Builds an Android App Bundle for the given flavor
+- `distribute_apk_firebase`: Uploads the APK to Firebase App Distribution
+- `build_ipa`: Builds an iOS IPA for the given flavor
+- `distribute_ipa_testflight`: Uploads the IPA to TestFlight
+- `distribute_ipa_app_store`: Uploads the IPA to App Store Connect
+
+The old `*_shared` lane names were renamed to these shorter exported names.
 
 ## Prerequisites
 
@@ -17,7 +23,7 @@ Currently Android lanes are provided; iOS can be added using the same pattern.
 - Your Flutter app uses Android flavors and has entrypoints like `lib/main_<flavor>.dart`
 - `.env.*` files exist in your Flutter app repo root (same directory as `pubspec.yaml`), e.g. `.env.dev`, `.env.stg`, `.env.prod`
 - Ruby + fastlane installed in the consuming app repository
-- Firebase App Distribution plugin (only needed if you use `distribute_android_shared`):
+- Firebase App Distribution plugin (only needed if you use `distribute_apk_firebase`):
   - Add to `Pluginfile` in the consuming app repo:
     ```ruby
     # Pluginfile
@@ -42,9 +48,9 @@ import_from_git(
   branch: "main" # or :tag => "v1.0.0" to pin
 )
 
-# Optional: wrap shared lanes with local defaults
+# Optional: wrap imported lanes with local defaults
 lane :build_android do |options|
-  build_android_shared(
+  build_apk(
     flavor: options[:flavor] || 'staging',
     target: options[:target] # defaults to lib/main_<flavor>.dart
   )
@@ -85,7 +91,7 @@ If using Firebase App Distribution, set these in your environment or CI secrets 
 
 ## Lanes and options
 
-### prepare_env_shared
+### prepare_env
 Copies the right `.env.*` to `.env` and optionally loads it into the Fastlane process using dotenv.
 
 Options:
@@ -96,18 +102,18 @@ Options:
 
 Examples:
 ```sh
-fastlane android prepare_env_shared flavor:staging load:true
-fastlane android prepare_env_shared flavor:qa env_map:"{ qa: '.env.qa' }"
+fastlane android prepare_env flavor:staging load:true
+fastlane android prepare_env flavor:qa env_map:"{ qa: '.env.qa' }"
 ```
 
-### bump_pubspec_version_shared
+### bump_pubspec_version
 Increments the patch number and build number in `pubspec.yaml` (`version: x.y.(z+1)+(build+1)`).
 
 ```sh
-fastlane android bump_pubspec_version_shared
+fastlane android bump_pubspec_version
 ```
 
-### build_android_shared
+### build_apk
 Builds a release APK with Flutter for the given flavor.
 
 Options:
@@ -120,12 +126,26 @@ Output APK (by default): `build/app/outputs/flutter-apk/app-<flavor>-release.apk
 
 Examples:
 ```sh
-fastlane android build_android_shared flavor:staging
-fastlane android build_android_shared flavor:production target:"lib/main_production.dart"
+fastlane android build_apk flavor:staging
+fastlane android build_apk flavor:production target:"lib/main_production.dart"
 ```
 
-### distribute_android_shared
-Prepares env, bumps version (can be disabled), builds, and uploads the APK to Firebase App Distribution.
+### build_app_bundle
+Builds an Android App Bundle with Flutter for the given flavor.
+
+Options:
+- `flavor` (String) – default `"production"`
+- `target` (String) – default `lib/main_<flavor>.dart`
+- `copy_env` (Boolean) – default `true`
+- `env_map` (Hash) – optional mapping
+
+Examples:
+```sh
+fastlane android build_app_bundle flavor:staging
+```
+
+### distribute_apk_firebase
+Prepares env, uploads the APK, and can use release notes from the latest commit.
 
 Options:
 - `flavor` (String) – default `"production"`
@@ -142,10 +162,10 @@ Options:
 Examples:
 ```sh
 # Basic (uses env vars for credentials)
-fastlane android distribute_android_shared flavor:staging
+fastlane android distribute_apk_firebase flavor:staging
 
 # Override APK path and provide explicit params
-fastlane android distribute_android_shared \
+fastlane android distribute_apk_firebase \
   flavor:staging \
   apk_path:"../build/app/outputs/flutter-apk/app-staging-release.apk" \
   firebase_app_id:"1:1234567890:android:abc123" \
@@ -153,17 +173,48 @@ fastlane android distribute_android_shared \
   release_notes:"QA build"
 
 # Skip version bump
-fastlane android distribute_android_shared flavor:staging bump:false
+fastlane android distribute_apk_firebase flavor:staging
 ```
+
+### build_ipa
+Builds an iOS IPA with Flutter for the given flavor.
+
+Options:
+- `flavor` (String) – default `"production"`
+- `target` (String) – default `lib/main_<flavor>.dart`
+- `copy_env` (Boolean) – default `true`
+- `env_map` (Hash) – optional mapping
+
+### distribute_ipa_testflight
+Prepares env, bumps version, builds, and uploads the IPA to TestFlight.
+
+Options:
+- `flavor` (String) – default `"production"`
+- `target` (String) – default `lib/main_<flavor>.dart`
+- `copy_env` (Boolean) – default `true`
+- `env_map` (Hash)
+- `bump` (Boolean) – default `true`
+- `ipa_path` (String) – default auto-detected from `../build/ios/ipa/`
+- `groups` (String) – defaults to `ENV["TESTFLIGHT_GROUPS"]`
+
+### distribute_ipa_app_store
+Prepares env, bumps version, builds, and uploads the IPA to App Store Connect.
+
+Options:
+- `flavor` (String) – default `"production"`
+- `target` (String) – default `lib/main_<flavor>.dart`
+- `copy_env` (Boolean) – default `true`
+- `env_map` (Hash)
+- `bump` (Boolean) – default `true`
+- `ipa_path` (String) – default auto-detected from `../build/ios/ipa/`
 
 ## Tips & troubleshooting
 
 - If `.env` isn’t being copied, confirm your `.env.*` files live next to `pubspec.yaml` and the flavor name matches mapping rules.
-- If the APK path differs in your project, pass `apk_path` explicitly to `distribute_android_shared`.
+- If the APK path differs in your project, pass `apk_path` explicitly to `distribute_apk_firebase`.
 - Ensure `flutter` is available on PATH in CI. Consider running `flutter --version` as a quick sanity check (the lane does this already).
 - To pin this shared repo to a stable release, import with a tag: `tag: "v1.0.0"`.
 
 ## Roadmap
 
-- Add iOS lanes mirroring the Android flow
 - Add sample CI pipelines (GitHub Actions, Bitrise) that call these lanes
