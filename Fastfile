@@ -13,24 +13,6 @@ def find_repo_root(start = Dir.pwd)
   UI.user_error!("Could not locate repo root containing pubspec.yaml from #{start}")
 end
 
-def map_env_file(flavor, root, env_map = nil)
-  f = flavor.to_s.downcase
-  return File.join(root, env_map[f]) if env_map && env_map[f]
-  return File.join(root, '.env.dev') if %w[develop development dev].include?(f)
-  return File.join(root, '.env.stg') if %w[staging stage stg].include?(f)
-  File.join(root, '.env.prod')
-end
-
-def do_prepare_env(flavor:, load_into_fastlane: false, dest: '.env', env_map: nil)
-  root = find_repo_root
-  env_path = map_env_file(flavor, root, env_map)
-  UI.message("Using env file: #{env_path}")
-  UI.user_error!("Env file not found: #{env_path}") unless File.exist?(env_path)
-  Dotenv.overload(env_path) if load_into_fastlane
-  FileUtils.cp(env_path, File.join(root, dest))
-  UI.success("Copied #{env_path} -> #{File.join(root, dest)}")
-end
-
 def bump_version_in_pubspec
   root = find_repo_root
   pubspec = File.join(root, 'pubspec.yaml')
@@ -54,7 +36,14 @@ end
 def flutter_build(flavor, target, build_type)
   sh "flutter --version"
   sh "flutter clean"
-  sh "flutter build #{build_type} --release --flavor #{flavor} -t #{target}"
+  if build_type == 'ipa'
+    # For iOS we rely on Xcode's build system to handle flavors, so we just specify the target and let it do its thing.
+    Bundler.with_original_env do
+      sh "flutter build #{build_type} --release -t #{target}"
+    end
+  else
+    sh "flutter build #{build_type} --release --flavor #{flavor} -t #{target}"
+  end
 end
 
 def resolve_android_apk_path(flavor:, apk_path: nil)
@@ -79,10 +68,6 @@ platform :android do
   lane :build_apk do |options|
     flavor = options[:flavor] || 'production'
     target = options[:target] || "lib/main_#{flavor}.dart"
-    copy_env = options.fetch(:copy_env, true)
-    env_map = options[:env_map]
-
-    prepare_env(flavor: flavor, load: false, env_map: env_map) if copy_env
     flutter_build(flavor, target, 'apk')
   end
 
@@ -90,17 +75,13 @@ platform :android do
   lane :build_app_bundle do |options|
     flavor = options[:flavor] || 'production'
     target = options[:target] || "lib/main_#{flavor}.dart"
-    copy_env = options.fetch(:copy_env, true)
-    env_map = options[:env_map]
-
-    prepare_env(flavor: flavor, load: false, env_map: env_map) if copy_env
     flutter_build(flavor, target, 'appbundle')
   end
 
   desc "Distribute APK to Firebase App Distribution"
   lane :distribute_apk_firebase do |options|
     flavor = options[:flavor] || 'production'
-    # build_apk(flavor: flavor, target: options[:target] || "lib/main_#{flavor}.dart", copy_env: options.fetch(:copy_env, true), env_map: options[:env_map])
+    build_apk(flavor: flavor, target: options[:target] || "lib/main_#{flavor}.dart")
     apk_path = resolve_android_apk_path(flavor: flavor, apk_path: options[:apk_path])
     release_notes = get_release_notes(options)
 
@@ -129,10 +110,6 @@ platform :ios do
   lane :build_ipa do |options|
     flavor = options[:flavor] || 'production'
     target = options[:target] || "lib/main_#{flavor}.dart"
-    copy_env = options.fetch(:copy_env, true)
-    env_map = options[:env_map]
-
-    prepare_env(flavor: flavor, load: false, env_map: env_map) if copy_env
     flutter_build(flavor, target, 'ipa')
   end
 
@@ -140,8 +117,7 @@ platform :ios do
     key_path = options[:api_key_path] || ENV["APP_STORE_CONNECT_API_KEY_PATH"]
     key_id = options[:api_key_id] || ENV["APP_STORE_CONNECT_API_KEY_ID"]
     issuer_id = options[:api_key_issuer_id] || ENV["APP_STORE_CONNECT_API_ISSUER_ID"]
-    key_b64 = options[:api_key_base64] || ENV["APP_STORE_CONNECT_API_KEY"]
-
+    key_b64 = options[:api_key_base64] || ENV["APP_STORE_CONNECT_API_KEY_BASE64"]
     if key_path && key_id && issuer_id
       app_store_connect_api_key(
         key_id: key_id,
@@ -161,22 +137,23 @@ platform :ios do
     end
   end
 
-  desc "Upload iOS build to TestFlight"
-  lane :distribute_ipa_testflight do |options|
+  private_lane :prepare_ios_distribution do |options|
     flavor = options[:flavor] || 'production'
     target = options[:target] || "lib/main_#{flavor}.dart"
-    copy_env = options.fetch(:copy_env, true)
-    env_map = options[:env_map]
     bump = options.fetch(:bump, true)
 
-    prepare_env(flavor: flavor, load: true, env_map: env_map) if copy_env
-    bump_pubspec_version if bump
-    build_ipa(flavor: flavor, target: target, copy_env: false, env_map: env_map)
+    bump_version_in_pubspec if bump
+    build_ipa(flavor: flavor, target: target)
 
     ipa_path = options[:ipa_path] || find_ipa
-    release_notes = get_release_notes(options)
-    
     configure_asc_api_key(options)
+    ipa_path
+  end
+
+  desc "Upload iOS build to TestFlight"
+  lane :distribute_ipa_testflight do |options|
+    ipa_path = prepare_ios_distribution(options)
+    release_notes = get_release_notes(options)
 
     upload_to_testflight(
       ipa: ipa_path,
@@ -188,18 +165,7 @@ platform :ios do
 
   desc "Upload iOS build to App Store"
   lane :distribute_ipa_app_store do |options|
-    flavor = options[:flavor] || 'production'
-    target = options[:target] || "lib/main_#{flavor}.dart"
-    copy_env = options.fetch(:copy_env, true)
-    env_map = options[:env_map]
-    bump = options.fetch(:bump, true)
-
-    prepare_env(flavor: flavor, load: true, env_map: env_map) if copy_env
-    bump_pubspec_version if bump
-    build_ipa(flavor: flavor, target: target, copy_env: false, env_map: env_map)
-
-    ipa_path = options[:ipa_path] || find_ipa
-    configure_asc_api_key(options)
+    ipa_path = prepare_ios_distribution(options)
 
     upload_to_app_store(
       ipa: ipa_path,
@@ -212,8 +178,10 @@ platform :ios do
   end
 
   private_lane :find_ipa do
-    ipa_path = Actions.sh("bash", "-lc", "ls ../build/ios/ipa/*.ipa | head -n1").strip
-    UI.user_error!("IPA not found at ../build/ios/ipa/*.ipa") if ipa_path.nil? || ipa_path.empty?
+    root = find_repo_root
+    pattern = File.join(root, 'build', 'ios', 'ipa', '*.ipa')
+    ipa_path = Dir.glob(pattern).sort.last
+    UI.user_error!("IPA not found at #{pattern}") if ipa_path.nil? || ipa_path.empty?
     ipa_path
   end
 end
