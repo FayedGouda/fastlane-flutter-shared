@@ -109,6 +109,9 @@ platform :ios do
 
   # Global configuration that runs before any lane
   before_all do |lane, options|
+
+    xcode_select "/Applications/Xcode_16.4.app"
+    
     # Setup App Store Connect API Key for all distribution tasks
     configure_asc_api_key(options)
     
