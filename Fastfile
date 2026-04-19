@@ -155,7 +155,8 @@ platform :ios do
         provisioningProfiles: {
           app_id => "match AppStore #{app_id}"
         }
-      }
+      },
+      clean: true
     )
       UI.success("IPA built at: #{ipa_path}")
     # 6. Upload to TestFlight
