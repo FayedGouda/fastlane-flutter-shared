@@ -125,13 +125,15 @@ platform :ios do
     # 1. RUN THE CHECK FIRST (Fails early to save time)
     # We pass the app_id so it knows which app to check on Apple's servers
     validate_version_is_higher(app_id: app_id)
+    setup_ci if ENV["CI"] || ENV["GITHUB_ACTIONS"]
 
     # 2. Sync Manual Signing (Certificates & Profiles)
     # match ensures the correct 'match AppStore ...' profile is on the machine
     match(
       app_identifier: app_id,
       type: options[:match_type] || "appstore",
-      readonly: is_ci
+      readonly: is_ci,
+      keychain_name: "fastlane_tmp_keychain"
     )
 
     # 3. Clean and Prep Pods
