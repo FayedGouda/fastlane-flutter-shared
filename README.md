@@ -63,6 +63,8 @@ import("../path/to/fastlane-flutter-shared/Fastfile")
 
 ## Environment and configuration
 
+The shared Fastlane files load `.env` automatically via `dotenv`, so any variables you define there are available to `Fastfile` and `Matchfile`.
+
 These lanes detect the app repo root by walking up to find `pubspec.yaml`.
 
 Build artifact defaults:
@@ -74,6 +76,11 @@ If using Firebase App Distribution, set these in your environment or CI secrets 
 - `FIREBASE_APP_ID` – Firebase App ID (Android)
 - `FIREBASE_TESTERS` – optional comma-separated tester emails
 - `RELEASE_NOTES` – optional; defaults to the latest git commit message
+
+If you use the shared `Matchfile`, set these as well:
+- `MATCH_GIT_URL` – the certificates repository URL
+- `MATCH_STORAGE_MODE` – optional, defaults to `git`
+- `MATCH_TYPE` – optional, defaults to `development`
 
 ## Lanes and options
 
@@ -131,11 +138,31 @@ fastlane android distribute_apk_firebase \
 ```
 
 ### build_ipa
-Builds an iOS IPA with Flutter for the given flavor.
+Builds an iOS IPA with Fastlane's Xcode archive flow for the given flavor.
 
 Options:
 - `flavor` (String) – default `"production"`
 - `target` (String) – default `lib/main_<flavor>.dart`
+- `scheme` (String) – optional Xcode scheme, default `Runner`
+- `workspace` (String) – optional Xcode workspace, default `ios/Runner.xcworkspace`
+- `export_method` (String) – optional export method, default `app-store`
+- `xcargs` (String) – optional extra Xcode build arguments, for example `-allowProvisioningUpdates`
+- `app_identifier` (String) – optional iOS app identifier override for CI signing
+- `team_id` (String) – optional Apple team ID override for CI signing
+- `match_type` (String) – optional `match` type override, default `appstore`
+- `project_path` (String) – optional Xcode project path override, default `ios/Runner.xcodeproj`
+- `profile_name` (String) – optional provisioning profile name override
+
+The lane injects `FLUTTER_TARGET=<target>` and `FLUTTER_BUILD_MODE=Release` into Xcode build arguments.
+
+When running in CI (`CI=true` or `GITHUB_ACTIONS=true`), the lane automatically runs `setup_ci` + `match` in readonly mode and applies manual code signing for Release. Configure these secrets/env vars in the consuming repository:
+
+- `MATCH_GIT_URL`
+- `MATCH_PASSWORD`
+- `MATCH_APP_IDENTIFIER` (or `IOS_APP_IDENTIFIER`)
+- `MATCH_TEAM_ID` (or `DEVELOPMENT_TEAM`)
+- `MATCH_TYPE` (optional, defaults to `appstore`)
+- `MATCH_PROFILE_NAME` (optional)
 
 ### distribute_ipa_testflight
 Bumps version (optional), builds, and uploads the IPA to TestFlight.
@@ -148,6 +175,8 @@ Options:
 - `groups` (String) – defaults to `ENV["TESTFLIGHT_GROUPS"]`
 - `skip_wait` (Boolean) – default `false`
 
+Any `build_ios_app` options (for example `xcargs`, `scheme`, and `workspace`) can be passed to this lane and are forwarded to the iOS build step.
+
 ### distribute_ipa_app_store
 Bumps version (optional), builds, and uploads the IPA to App Store Connect.
 
@@ -158,6 +187,8 @@ Options:
 - `ipa_path` (String) – default auto-detected from `build/ios/ipa/*.ipa`
 - `submit_for_review` (Boolean) – default `false`
 - `automatic_release` (Boolean) – default `false`
+
+Any `build_ios_app` options (for example `xcargs`, `scheme`, and `workspace`) can be passed to this lane and are forwarded to the iOS build step.
 
 ## Tips & troubleshooting
 

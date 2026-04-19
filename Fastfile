@@ -1,6 +1,6 @@
-require 'dotenv'
+require 'dotenv/load'
 require 'fileutils'
-
+require 'yaml'
 ########################## Shared Helper Methods ##########################
 def find_repo_root(start = Dir.pwd)
   dir = File.expand_path(start)
@@ -35,7 +35,7 @@ end
 
 def flutter_build(flavor, target, build_type)
   sh "flutter --version"
-  sh "flutter clean"
+  # sh "flutter clean"
   if build_type == 'ipa'
     # For iOS we rely on Xcode's build system to handle flavors, so we just specify the target and let it do its thing.
     Bundler.with_original_env do
@@ -106,82 +106,133 @@ end
 ########################## iOS Platform ##########################
 
 platform :ios do
-  desc "Build iOS IPA"
-  lane :build_ipa do |options|
-    flavor = options[:flavor] || 'production'
-    target = options[:target] || "lib/main_#{flavor}.dart"
-    flutter_build(flavor, target, 'ipa')
+
+  # Global configuration that runs before any lane
+  before_all do |lane, options|
+    # Setup App Store Connect API Key for all distribution tasks
+    configure_asc_api_key(options)
+    
+    # Creates a temporary keychain on CI to avoid permission prompts
+    setup_ci if ENV["CI"] || ENV["GITHUB_ACTIONS"]
   end
 
+  desc "Push a new beta build to TestFlight"
+  lane :beta do |options|
+    # 1. Configuration & Defaults
+    app_id = options[:app_identifier] || CredentialsManager::AppfileConfig.try_fetch_value(:app_identifier)
+    UI.user_error!("App Identifier is missing!") unless app_id
+
+    # 1. RUN THE CHECK FIRST (Fails early to save time)
+    # We pass the app_id so it knows which app to check on Apple's servers
+    validate_version_is_higher(app_id: app_id)
+
+    # 2. Sync Manual Signing (Certificates & Profiles)
+    # match ensures the correct 'match AppStore ...' profile is on the machine
+    match(
+      app_identifier: app_id,
+      type: options[:match_type] || "appstore",
+      readonly: is_ci
+    )
+
+    # 3. Clean and Prep Pods
+    cocoapods(clean_install: true)
+
+    # 4. Flutter Build (Compile only)
+    # We build the 'ios' target without signing to let Fastlane handle the identity
+    target = options[:flutter_target] || "lib/main.dart"
+    UI.message("Building Flutter iOS app with target: #{target}")
+    sh("flutter build ios --release --no-codesign")
+
+    # 5. Build and Sign the IPA
+    # This uses the 'match' profiles we just downloaded
+    ipa_path = build_app(
+      workspace: "Runner.xcworkspace",
+      scheme: "Runner",
+      export_method: "app-store",
+      export_options: {
+        provisioningProfiles: {
+          app_id => "match AppStore #{app_id}"
+        }
+      }
+    )
+      UI.success("IPA built at: #{ipa_path}")
+    # 6. Upload to TestFlight
+    upload_to_testflight(
+      ipa: ipa_path,
+      changelog: get_release_notes(options),
+      groups: options[:groups] || ENV["TESTFLIGHT_GROUPS"],
+      skip_waiting_for_build_processing: options.fetch(:skip_wait, true)
+    )
+  end
+
+  desc "Promote build to App Store"
+  lane :release do |options|
+    # Reuses the beta lane to build, but uploads to App Store instead
+    # You can also use 'upload_to_app_store' if you have an existing IPA
+    beta(options) 
+    
+    upload_to_app_store(
+      force: true,
+      skip_screenshots: true,
+      skip_metadata: true
+    )
+  end
+
+  # --- Private Helper Lanes ---
+
   private_lane :configure_asc_api_key do |options|
-    key_path = options[:api_key_path] || ENV["APP_STORE_CONNECT_API_KEY_PATH"]
     key_id = options[:api_key_id] || ENV["APP_STORE_CONNECT_API_KEY_ID"]
     issuer_id = options[:api_key_issuer_id] || ENV["APP_STORE_CONNECT_API_ISSUER_ID"]
-    key_b64 = options[:api_key_base64] || ENV["APP_STORE_CONNECT_API_KEY_BASE64"]
-    if key_path && key_id && issuer_id
+    key_content = options[:api_key_base64] || ENV["APP_STORE_CONNECT_API_KEY_BASE64"]
+    
+    if key_id && issuer_id && key_content
       app_store_connect_api_key(
         key_id: key_id,
         issuer_id: issuer_id,
-        key_filepath: key_path,
-        is_key_content_base64: false
-      )
-    elsif key_b64 && key_id && issuer_id
-      app_store_connect_api_key(
-        key_id: key_id,
-        issuer_id: issuer_id,
-        key_content: key_b64,
+        key_content: key_content,
         is_key_content_base64: true
       )
     else
-      UI.message("No App Store Connect API key configured")
+      UI.important("ASC API Key not found. Falling back to session/password if available.")
     end
   end
 
-  private_lane :prepare_ios_distribution do |options|
-    flavor = options[:flavor] || 'production'
-    target = options[:target] || "lib/main_#{flavor}.dart"
-    bump = options.fetch(:bump, true)
+  private_lane :validate_version_is_higher do |options|
+  app_id = options[:app_id]
+  
+  # 1. Get the current ceiling from Apple
+  UI.message("🔍 Fetching latest build from TestFlight...")
+  latest_tf_build = latest_testflight_build_number(
+    app_identifier: app_id,
+    initial_build_number: 1
+  )
 
-    bump_version_in_pubspec if bump
-    build_ipa(flavor: flavor, target: target)
+  UI.message("Latest TestFlight build number: #{latest_tf_build}")
 
-    ipa_path = options[:ipa_path] || find_ipa
-    configure_asc_api_key(options)
-    ipa_path
+  # 2. Read pubspec.yaml directly (2 levels up from /ios/fastlane)
+  pubspec_path = File.expand_path("../../pubspec.yaml", Dir.pwd)
+  
+  begin
+    pubspec = YAML.load_file(pubspec_path)
+    version_line = pubspec['version'] # e.g., "1.2.1+24"
+    # Logic: Split by '+', take the last part, turn into integer
+    local_build_number = version_line.split('+').last.to_i
+  rescue => e
+    UI.user_error!("❌ Error reading pubspec.yaml: #{e.message}")
   end
 
-  desc "Upload iOS build to TestFlight"
-  lane :distribute_ipa_testflight do |options|
-    ipa_path = prepare_ios_distribution(options)
-    release_notes = get_release_notes(options)
+  UI.message("--- Version Sync Check ---")
+  UI.message("TestFlight Build: #{latest_tf_build}")
+  UI.message("Pubspec Build:    #{local_build_number}")
+  UI.message("--------------------------")
 
-    upload_to_testflight(
-      ipa: ipa_path,
-      changelog: release_notes,
-      groups: options[:groups] || ENV["TESTFLIGHT_GROUPS"],
-      skip_waiting_for_build_processing: options.fetch(:skip_wait, false)
-    )
+  # 3. Validation
+  if local_build_number <= latest_tf_build
+    UI.user_error!("❌ STOP: Your pubspec.yaml build number (#{local_build_number}) must be higher than TestFlight (#{latest_tf_build}). Update pubspec.yaml and try again.")
   end
 
-  desc "Upload iOS build to App Store"
-  lane :distribute_ipa_app_store do |options|
-    ipa_path = prepare_ios_distribution(options)
+  UI.success("✅ Version check passed. Flutter build will use: #{version_line}")
+end
 
-    upload_to_app_store(
-      ipa: ipa_path,
-      skip_screenshots: true,
-      skip_metadata: true,
-      force: true,
-      submit_for_review: options.fetch(:submit_for_review, false),
-      automatic_release: options.fetch(:automatic_release, false)
-    )
-  end
-
-  private_lane :find_ipa do
-    root = find_repo_root
-    pattern = File.join(root, 'build', 'ios', 'ipa', '*.ipa')
-    ipa_path = Dir.glob(pattern).sort.last
-    UI.user_error!("IPA not found at #{pattern}") if ipa_path.nil? || ipa_path.empty?
-    ipa_path
-  end
+  
 end
